@@ -75,7 +75,7 @@ const Dropzone: React.FC<DropzoneProps> = ({ onFilesDropped }) => {
         </div>
 
         <p className="mt-8 text-xs text-gray-600 font-mono">
-          JPG, PNG, WEBP 対応
+          JPG, PNG, WEBP, HEIC/HEIF 対応
         </p>
       </div>
     </div>

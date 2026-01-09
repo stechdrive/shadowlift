@@ -4,7 +4,7 @@ import Editor from './components/Editor';
 import BatchProcessor from './components/BatchProcessor';
 import { AppMode } from './types';
 import { Camera } from 'lucide-react';
-import { filterAcceptedFiles } from './constants';
+import { filterAcceptedFiles, isHeicFile } from './constants';
 
 const App: React.FC = () => {
   const [files, setFiles] = useState<File[]>([]);
@@ -43,9 +43,49 @@ const App: React.FC = () => {
     return () => {};
   }, [appVersion]);
 
-  const handleFilesDropped = (droppedFiles: File[]) => {
-    setFiles(droppedFiles);
-    if (droppedFiles.length === 1) {
+  const dropCounterRef = useRef(0);
+
+  const convertHeicToJpeg = async (file: File): Promise<File> => {
+    const heic2anyModule = await import('heic2any');
+    const heic2any = heic2anyModule.default;
+    const result = await heic2any({
+      blob: file,
+      toType: 'image/jpeg',
+      quality: 0.92,
+    });
+    const blob = Array.isArray(result) ? result[0] : result;
+    const jpegBlob =
+      blob instanceof Blob ? blob : new Blob([blob], { type: 'image/jpeg' });
+    const baseName = file.name.replace(/\.(heic|heif)$/i, '') || file.name;
+    return new File([jpegBlob], `${baseName}.jpg`, {
+      type: 'image/jpeg',
+      lastModified: file.lastModified,
+    });
+  };
+
+  const normalizeDroppedFiles = async (droppedFiles: File[]): Promise<File[]> => {
+    const normalized: File[] = [];
+    for (const file of droppedFiles) {
+      if (isHeicFile(file)) {
+        try {
+          normalized.push(await convertHeicToJpeg(file));
+        } catch (error) {
+          console.error('HEIC/HEIF conversion failed', error);
+        }
+      } else {
+        normalized.push(file);
+      }
+    }
+    return normalized;
+  };
+
+  const handleFilesDropped = async (droppedFiles: File[]) => {
+    const dropId = ++dropCounterRef.current;
+    const normalizedFiles = await normalizeDroppedFiles(droppedFiles);
+    if (dropId !== dropCounterRef.current) return;
+    if (normalizedFiles.length === 0) return;
+    setFiles(normalizedFiles);
+    if (normalizedFiles.length === 1) {
       setMode(AppMode.EDITOR);
     } else {
       setMode(AppMode.BATCH_PROCESSING);

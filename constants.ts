@@ -30,11 +30,43 @@ export const ACCEPTED_TYPES = {
   'image/jpeg': ['.jpg', '.jpeg'],
   'image/png': ['.png'],
   'image/webp': ['.webp'],
-  'image/tiff': ['.tif', '.tiff'], 
+  'image/tiff': ['.tif', '.tiff'],
+  'image/heic': ['.heic'],
+  'image/heif': ['.heif'],
+  'image/heic-sequence': ['.heic'],
+  'image/heif-sequence': ['.heif'],
 };
 
 export const ACCEPTED_MIME_TYPES = Object.keys(ACCEPTED_TYPES);
 export const ACCEPTED_MIME_TYPES_STRING = ACCEPTED_MIME_TYPES.join(',');
+export const ACCEPTED_EXTENSIONS = Object.values(ACCEPTED_TYPES).flat();
+export const HEIC_MIME_TYPES = [
+  'image/heic',
+  'image/heif',
+  'image/heic-sequence',
+  'image/heif-sequence',
+];
+export const HEIC_EXTENSIONS = ['.heic', '.heif'];
+
+const getLowercaseExtension = (name: string): string | null => {
+  const index = name.lastIndexOf('.');
+  if (index === -1) return null;
+  return name.slice(index).toLowerCase();
+};
+
+export const isHeicFile = (file: File): boolean => {
+  const type = file.type.toLowerCase();
+  const extension = getLowercaseExtension(file.name);
+  return (
+    (type !== '' && HEIC_MIME_TYPES.includes(type)) ||
+    (extension !== null && HEIC_EXTENSIONS.includes(extension))
+  );
+};
 
 export const filterAcceptedFiles = (files: File[]): File[] =>
-  files.filter((file) => ACCEPTED_MIME_TYPES.includes(file.type));
+  files.filter((file) => {
+    const type = file.type.toLowerCase();
+    if (type !== '' && ACCEPTED_MIME_TYPES.includes(type)) return true;
+    const extension = getLowercaseExtension(file.name);
+    return extension !== null && ACCEPTED_EXTENSIONS.includes(extension);
+  });
