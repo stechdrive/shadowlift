@@ -95,144 +95,6 @@ const smoothstep = (edge0: number, edge1: number, x: number): number => {
     return t * t * (3.0 - 2.0 * t);
 };
 
-const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
-
-const boxFilter = (
-    src: Float32Array,
-    width: number,
-    height: number,
-    radius: number
-): Float32Array => {
-    const size = width * height;
-    const tmp = new Float32Array(size);
-    const dst = new Float32Array(size);
-    const windowSize = radius * 2 + 1;
-    const area = windowSize * windowSize;
-
-    // Horizontal pass (edge-replicated)
-    for (let y = 0; y < height; y++) {
-        const row = y * width;
-        let sum = 0;
-        for (let x = -radius; x <= radius; x++) {
-            const xi = Math.min(width - 1, Math.max(0, x));
-            sum += src[row + xi];
-        }
-        for (let x = 0; x < width; x++) {
-            tmp[row + x] = sum;
-            const addX = Math.min(width - 1, x + radius + 1);
-            const subX = Math.max(0, x - radius);
-            sum += src[row + addX] - src[row + subX];
-        }
-    }
-
-    // Vertical pass (edge-replicated)
-    for (let x = 0; x < width; x++) {
-        let sum = 0;
-        for (let y = -radius; y <= radius; y++) {
-            const yi = Math.min(height - 1, Math.max(0, y));
-            sum += tmp[yi * width + x];
-        }
-        for (let y = 0; y < height; y++) {
-            dst[y * width + x] = sum / area;
-            const addY = Math.min(height - 1, y + radius + 1);
-            const subY = Math.max(0, y - radius);
-            sum += tmp[addY * width + x] - tmp[subY * width + x];
-        }
-    }
-
-    return dst;
-};
-
-// Guided filter (self-guided) for edge-preserving smoothing of luminance.
-const guidedFilter = (
-    input: Float32Array,
-    width: number,
-    height: number,
-    radius: number,
-    eps: number
-): Float32Array => {
-    const size = input.length;
-    const meanI = boxFilter(input, width, height, radius);
-
-    const inputSquared = new Float32Array(size);
-    for (let i = 0; i < size; i++) {
-        inputSquared[i] = input[i] * input[i];
-    }
-    const meanII = boxFilter(inputSquared, width, height, radius);
-
-    const a = new Float32Array(size);
-    const b = new Float32Array(size);
-    for (let i = 0; i < size; i++) {
-        const varI = meanII[i] - meanI[i] * meanI[i];
-        const ai = varI / (varI + eps);
-        a[i] = ai;
-        b[i] = meanI[i] - ai * meanI[i];
-    }
-
-    const meanA = boxFilter(a, width, height, radius);
-    const meanB = boxFilter(b, width, height, radius);
-
-    const output = new Float32Array(size);
-    for (let i = 0; i < size; i++) {
-        output[i] = meanA[i] * input[i] + meanB[i];
-    }
-
-    return output;
-};
-
-const createToneMapper = (settings: ImageSettings) => {
-    const exposureMult = Math.pow(2, settings.exposure);
-    const S = settings.shadows / 100;
-    const H = settings.highlights / 100;
-    const W = settings.whites / 100;
-    const B = settings.blacks / 100;
-    const C = settings.contrast / 100;
-
-    return (yLin: number): number => {
-        let y = Math.max(0, yLin) * exposureMult;
-        let yDisp = clamp01(linearToSrgb(y));
-
-        // Adobe Basic panel target ranges (display-referred):
-        // Shadows: 10-30%, Highlights: 70-90%, Whites: 90-100%, Blacks: 0-10%, Contrast: 30-70%.
-        const wShadows = 1.0 - smoothstep(0.10, 0.30, yDisp);
-        const wHighlights = smoothstep(0.70, 0.90, yDisp);
-        const wWhites = smoothstep(0.90, 1.00, yDisp);
-        const wBlacks = 1.0 - smoothstep(0.00, 0.10, yDisp);
-        const wMid = smoothstep(0.20, 0.40, yDisp) * (1.0 - smoothstep(0.60, 0.80, yDisp));
-
-        if (C !== 0) {
-            const contrastFactor = Math.max(0.1, 1 + C * 0.8);
-            const yContrast = (yDisp - 0.5) * contrastFactor + 0.5;
-            yDisp = lerp(yDisp, yContrast, Math.abs(C) * wMid);
-        }
-
-        if (S !== 0) {
-            const shadowPower = S >= 0 ? 1 - S * 0.6 : 1 - S * 1.0;
-            const yShadow = Math.pow(yDisp, shadowPower);
-            yDisp = lerp(yDisp, yShadow, Math.abs(S) * wShadows);
-        }
-
-        if (H !== 0) {
-            const highlightPower = H >= 0 ? 1 + H * 1.3 : 1 / (1 + (-H) * 1.3);
-            const yHighlight = 1 - Math.pow(1 - yDisp, highlightPower);
-            yDisp = lerp(yDisp, yHighlight, Math.abs(H) * wHighlights);
-        }
-
-        if (W !== 0) {
-            const delta = W > 0 ? (1 - yDisp) : yDisp;
-            yDisp += W * wWhites * delta;
-        }
-
-        if (B !== 0) {
-            const delta = B > 0 ? (0.10 - yDisp) : yDisp;
-            yDisp += B * wBlacks * delta;
-        }
-
-        yDisp = clamp01(yDisp);
-        return srgbToLinear(yDisp);
-    };
-};
-
 /**
  * Main processing function
  * Implements Base/Detail separation with improved Shadow Recovery logic
@@ -257,46 +119,123 @@ export const processImage = async (
   ctx.drawImage(img, 0, 0);
   const originalData = getImageData(ctx, width, height);
 
-  // 2. Create edge-preserving "Base" luminance using a guided filter.
-  const size = width * height;
-  const luma = new Float32Array(size);
-  for (let i = 0, p = 0; i < originalData.length; i += 4, p++) {
-    const r = srgbToLinear(originalData[i] / 255);
-    const g = srgbToLinear(originalData[i + 1] / 255);
-    const b = srgbToLinear(originalData[i + 2] / 255);
-    luma[p] = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  }
-  const radius = Math.max(4, Math.round(Math.min(width, height) * 0.015));
-  const eps = 1e-3;
-  const baseLuma = guidedFilter(luma, width, height, radius, eps);
+  // 2. Create "Base" Layer (Low Frequency)
+  // We use a blurred version to represent local lighting.
+  const blurRadius = Math.max(2, Math.floor(Math.min(width, height) * 0.012));
+  
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = width;
+  tempCanvas.height = height;
+  const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
+  if (!tempCtx) throw new Error('Could not get temp canvas context');
+
+  tempCtx.filter = `blur(${blurRadius}px)`;
+  tempCtx.drawImage(img, 0, 0);
+  const baseData = getImageData(tempCtx, width, height);
+  tempCtx.filter = 'none';
 
   // Create output buffer
   const outputImageData = ctx.createImageData(width, height);
   const outputData = outputImageData.data;
 
   // --- Pre-calculate Parameters ---
-  const toneMap = createToneMapper(settings);
+  const exposureMult = Math.pow(2, settings.exposure);
+  
   const S = settings.shadows / 100;
+  const H = settings.highlights / 100;
+  const W = settings.whites / 100;
   const B = settings.blacks / 100;
+  const C = settings.contrast / 100;
+
+  const contrastFactor = C >= 0 ? 1 + C : 1 / (1 - C);
+  const pivotLin = 0.18; // Linear Middle Gray
 
   // Process Pixels
   const len = originalData.length;
   
-  for (let i = 0, p = 0; i < len; i += 4, p++) {
+  for (let i = 0; i < len; i += 4) {
     // --- 1. Read Original (Detail source) ---
     const r_orig = originalData[i] / 255;
     const g_orig = originalData[i + 1] / 255;
     const b_orig = originalData[i + 2] / 255;
 
+    // --- 2. Read Base (Lighting source) ---
+    const r_base = baseData[i] / 255;
+    const g_base = baseData[i + 1] / 255;
+    const b_base = baseData[i + 2] / 255;
+
     // Convert to linear (we'll do tone mapping in linear luminance)
     const ro_lin = srgbToLinear(r_orig);
     const go_lin = srgbToLinear(g_orig);
     const bo_lin = srgbToLinear(b_orig);
-    const y_orig_lin = luma[p];
-    const y_base_lin = Math.max(0.0001, baseLuma[p]);
-    const y_target_lin = toneMap(y_base_lin);
 
-    // --- 3. Reconstruct (shadow-friendly, less "crunchy") ---
+    const rb_lin = srgbToLinear(r_base);
+    const gb_lin = srgbToLinear(g_base);
+    const bb_lin = srgbToLinear(b_base);
+
+    // Linear Luminance (base)
+    let y_base_lin = 0.2126 * rb_lin + 0.7152 * gb_lin + 0.0722 * bb_lin;
+
+    // Add epsilon to prevent divide-by-zero later (also stabilizes deep-black math)
+    y_base_lin = Math.max(0.0001, y_base_lin);
+// --- 3. Tone Map the Base Layer ---
+    let y_target_lin = y_base_lin;
+
+    // A. Exposure
+    if (exposureMult !== 1) {
+        y_target_lin *= exposureMult;
+    }
+
+    // B. Shadows (Improved: Stronger Lift & Toe Lift)
+    // Refined based on feedback: "Lift pure black more, allow it to look slightly washed/matte."
+    if (S !== 0) {
+        // Power Curve: Slightly stronger lift (0.60 -> 0.65)
+        const shadowPower = 1.0 - (S * 0.65); 
+        
+        let y_lifted = Math.pow(y_target_lin, shadowPower);
+
+        // Toe Lift (Matte Black Effect):
+        // Increased from 0.02 to 0.05 to allow visible lifting of pure blacks.
+        // This mimics the "Blacks" slider or strong Shadow recovery in LR.
+        if (S > 0) {
+            const toeLift = S * 0.05; 
+            // Decay function: Relaxed decay (-12.0 -> -9.0) to spread the lift effect wider (softer look)
+            y_lifted += toeLift * Math.exp(-9.0 * y_target_lin);
+        }
+        
+        // Blend Weight: Apply mostly to darks.
+        // Relaxed power (4.0 -> 3.0) to allow the shadow lift to blend smoother into midtones, reducing perceived contrast.
+        const blend = Math.pow(1.0 - Math.min(1.0, y_target_lin), 3.0);
+        
+        y_target_lin = y_target_lin * (1.0 - blend) + y_lifted * blend;
+    }
+
+    // C. Highlights (Compression)
+    if (H !== 0) {
+        // Focus on top end
+        const highlightMask = Math.pow(Math.min(1, y_target_lin), 3.0);
+        if (H < 0) {
+             y_target_lin = y_target_lin * (1.0 + H * 0.6 * highlightMask);
+        } else {
+             y_target_lin = y_target_lin * (1.0 + H * 0.6 * highlightMask);
+        }
+    }
+
+    // D. Whites / Blacks (Additive/Offset)
+    // These shift the floor/ceiling.
+    if (W !== 0) y_target_lin += W * 0.15 * Math.pow(y_target_lin, 2.0);
+    if (B !== 0) y_target_lin += B * 0.15 * Math.pow(1.0 - y_target_lin, 3.0);
+
+    // E. Contrast (Pivot)
+    if (C !== 0) {
+        if (y_target_lin > 0) {
+             y_target_lin = pivotLin * Math.pow(y_target_lin / pivotLin, contrastFactor);
+        }
+    }
+    
+    y_target_lin = Math.max(0, y_target_lin);
+
+    // --- 4. Reconstruct (shadow-friendly, less "crunchy") ---
     // Ratio = NewBase / OldBase (linear)
     const liftRatio = y_target_lin / y_base_lin;
 
@@ -310,18 +249,16 @@ export const processImage = async (
     const g_scaled_orig_lin = go_lin * clampedRatio;
     const b_scaled_orig_lin = bo_lin * clampedRatio;
 
-    // Approximate base RGB from luminance ratio to preserve color.
-    const baseRatio = y_orig_lin > 0 ? (y_base_lin / y_orig_lin) : 1.0;
-    const r_scaled_base_lin = ro_lin * baseRatio * clampedRatio;
-    const g_scaled_base_lin = go_lin * baseRatio * clampedRatio;
-    const b_scaled_base_lin = bo_lin * baseRatio * clampedRatio;
+    const r_scaled_base_lin = rb_lin * clampedRatio;
+    const g_scaled_base_lin = gb_lin * clampedRatio;
+    const b_scaled_base_lin = bb_lin * clampedRatio;
 
     // Toe / shadow mask: 1.0 in deep shadows, 0.0 by ~25% luminance.
     const toeEnd = 0.25;
     const toeMask = 1.0 - smoothstep(0.0, toeEnd, Math.min(1.0, y_target_lin));
 
     // Detail damping (reduces perceived contrast/noise in lifted shadows)
-    const detailDamp = Math.max(0.0, S) * 0.25; // reduce micro-contrast in lifted shadows
+    const detailDamp = Math.max(0.0, S) * 0.35; // up to 35% at Shadows +100
     const detailWeight = Math.max(0.35, 1.0 - detailDamp * toeMask);
 
     let r_out_lin = r_scaled_base_lin * (1.0 - detailWeight) + r_scaled_orig_lin * detailWeight;
@@ -330,8 +267,8 @@ export const processImage = async (
 
     // Small additive toe lift (fixes "pure black never lifts" when using multiplicative detail preservation).
     // This intentionally behaves a bit like a tiny built-in "Blacks +" when Shadows is positive.
-    const toeFromShadows = Math.max(0.0, S) * 0.0010; // ~0.0 to ~0.0010 linear
-    const toeFromBlacks = Math.max(0.0, B) * 0.0020;  // allow explicit matte toe via Blacks +
+    const toeFromShadows = Math.max(0.0, S) * 0.0012; // ~0.0 to ~0.0012 linear
+    const toeFromBlacks = Math.max(0.0, B) * 0.0024;  // allow explicit matte toe via Blacks +
     const toeLiftLin = (toeFromShadows + toeFromBlacks) * toeMask;
 
     r_out_lin = Math.max(0.0, r_out_lin + toeLiftLin);
