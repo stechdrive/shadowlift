@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Dropzone from './components/Dropzone';
 import Editor from './components/Editor';
 import BatchProcessor from './components/BatchProcessor';
@@ -9,6 +9,39 @@ import { filterAcceptedFiles } from './constants';
 const App: React.FC = () => {
   const [files, setFiles] = useState<File[]>([]);
   const [mode, setMode] = useState<AppMode>(AppMode.IDLE);
+  const appVersion = __APP_VERSION__;
+  const lastCheckedRef = useRef(0);
+
+  useEffect(() => {
+    const baseUrl = new URL(import.meta.env.BASE_URL, window.location.origin).toString();
+    const versionUrl = `${baseUrl}version.json`;
+
+    const checkVersion = async () => {
+      try {
+        const now = Date.now();
+        if (now - lastCheckedRef.current < 60_000) return;
+        lastCheckedRef.current = now;
+        const response = await fetch(`${versionUrl}?t=${now}`, { cache: 'no-store' });
+        if (!response.ok) return;
+        const data = (await response.json()) as { version?: string };
+        if (data.version && data.version !== appVersion) {
+          const storageKey = 'shadowlift:last-reload-version';
+          const lastReloaded = sessionStorage.getItem(storageKey);
+          if (lastReloaded !== data.version) {
+            sessionStorage.setItem(storageKey, data.version);
+            window.location.replace(`${baseUrl}?v=${data.version}`);
+          }
+          return;
+        }
+        sessionStorage.removeItem('shadowlift:last-reload-version');
+      } catch {
+        // Ignore network errors and keep the current session running.
+      }
+    };
+
+    checkVersion();
+    return () => {};
+  }, [appVersion]);
 
   const handleFilesDropped = (droppedFiles: File[]) => {
     setFiles(droppedFiles);
@@ -91,7 +124,7 @@ const App: React.FC = () => {
           </main>
           
           <footer className="py-6 text-center text-gray-600 text-xs">
-            © 2026 stechdrive. 画像はサーバーに送信されません。
+            © 2026 stechdrive. 画像はサーバーに送信されません。 v{appVersion}
           </footer>
         </div>
       )}
