@@ -25,4 +25,4 @@ dist-ssr
 
 # Codex agent instructions (keep untracked)
 AGENTS.md
-AGETNS.md
+loft/
