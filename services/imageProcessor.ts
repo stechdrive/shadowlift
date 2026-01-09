@@ -97,6 +97,31 @@ const smoothstep = (edge0: number, edge1: number, x: number): number => {
 
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 
+const buildHistogram = (values: Float32Array, bins = 256): Uint32Array => {
+    const hist = new Uint32Array(bins);
+    const scale = bins - 1;
+    for (let i = 0; i < values.length; i++) {
+        const v = clamp01(linearToSrgb(values[i]));
+        const idx = Math.min(scale, Math.max(0, Math.floor(v * scale)));
+        hist[idx]++;
+    }
+    return hist;
+};
+
+const percentileFromHistogram = (hist: Uint32Array, percentile: number): number => {
+    const total = hist.reduce((sum, v) => sum + v, 0);
+    if (!total) return 0;
+    const target = total * percentile;
+    let running = 0;
+    for (let i = 0; i < hist.length; i++) {
+        running += hist[i];
+        if (running >= target) {
+            return i / (hist.length - 1);
+        }
+    }
+    return 1;
+};
+
 const boxFilter = (
     src: Float32Array,
     width: number,
@@ -180,7 +205,15 @@ const guidedFilter = (
     return output;
 };
 
-const createToneMapper = (settings: ImageSettings) => {
+type ShadowTuning = {
+    shadowEnd: number;
+    shadowGateStart: number;
+    shadowGateEnd: number;
+    shadowNotchStrength: number;
+    midLift: number;
+};
+
+const createToneMapper = (settings: ImageSettings, tuning: ShadowTuning) => {
     const exposureMult = Math.pow(2, settings.exposure);
     const S = settings.shadows / 100;
     const H = settings.highlights / 100;
@@ -196,12 +229,12 @@ const createToneMapper = (settings: ImageSettings) => {
         // Shadows: 10-30%, Highlights: 70-90%, Whites: 90-100%, Blacks: 0-10%, Contrast: 30-70%.
         // Shadow range: widen toward midtones, gate deep blacks, and damp the low-mid band
         // to better match Lightroom's Shadows response.
-        const wShadowsBase = 1.0 - smoothstep(0.10, 0.60, yDisp);
-        const shadowGate = smoothstep(0.02, 0.12, yDisp);
+        const wShadowsBase = 1.0 - smoothstep(0.10, tuning.shadowEnd, yDisp);
+        const shadowGate = smoothstep(tuning.shadowGateStart, tuning.shadowGateEnd, yDisp);
         const shadowNotch =
             smoothstep(0.05, 0.12, yDisp) *
             (1.0 - smoothstep(0.12, 0.22, yDisp));
-        const wShadows = wShadowsBase * shadowGate * (1.0 - 0.4 * shadowNotch);
+        const wShadows = wShadowsBase * shadowGate * (1.0 - tuning.shadowNotchStrength * shadowNotch);
         const wHighlights = smoothstep(0.70, 0.90, yDisp);
         const wWhites = smoothstep(0.90, 1.00, yDisp);
         const wBlacks = 1.0 - smoothstep(0.00, 0.10, yDisp);
@@ -218,7 +251,7 @@ const createToneMapper = (settings: ImageSettings) => {
             const yShadow = Math.pow(yDisp, shadowPower);
             yDisp = lerp(yDisp, yShadow, Math.abs(S) * wShadows);
             // Gentle midtone lift to match Lightroom's Shadows behavior at high values.
-            yDisp += Math.abs(S) * 0.07 * wMid;
+            yDisp += Math.abs(S) * tuning.midLift * wMid;
         }
 
         if (H !== 0) {
@@ -279,14 +312,30 @@ export const processImage = async (
   const eps = 1e-3;
   const baseLuma = guidedFilter(luma, width, height, radius, eps);
 
+  // Adaptive shadow tuning based on luminance distribution (Lightroom-like behavior).
+  const hist = buildHistogram(baseLuma);
+  const p05 = percentileFromHistogram(hist, 0.05);
+  const p20 = percentileFromHistogram(hist, 0.20);
+  const deepShadowGain = clamp01((0.05 - p05) / 0.05);
+  const shadowRangeBoost = clamp01((0.30 - p20) / 0.30);
+  const shadowTuning: ShadowTuning = {
+    shadowEnd: lerp(0.55, 0.70, shadowRangeBoost),
+    shadowGateStart: lerp(0.02, 0.005, deepShadowGain),
+    shadowGateEnd: lerp(0.12, 0.08, deepShadowGain),
+    shadowNotchStrength: lerp(0.45, 0.25, deepShadowGain),
+    midLift: lerp(0.06, 0.08, shadowRangeBoost),
+  };
+
   // Create output buffer
   const outputImageData = ctx.createImageData(width, height);
   const outputData = outputImageData.data;
 
   // --- Pre-calculate Parameters ---
-  const toneMap = createToneMapper(settings);
+  const toneMap = createToneMapper(settings, shadowTuning);
   const S = settings.shadows / 100;
   const B = settings.blacks / 100;
+  const toeFromShadowsBase = lerp(0.0010, 0.0022, deepShadowGain);
+  const toeEnd = lerp(0.22, 0.18, deepShadowGain);
 
   // Process Pixels
   const len = originalData.length;
@@ -326,7 +375,6 @@ export const processImage = async (
     const b_scaled_base_lin = bo_lin * baseRatio * clampedRatio;
 
     // Toe / shadow mask: 1.0 in deep shadows, 0.0 by ~25% luminance.
-    const toeEnd = 0.25;
     const toeMask = 1.0 - smoothstep(0.0, toeEnd, Math.min(1.0, y_target_lin));
 
     // Detail damping (reduces perceived contrast/noise in lifted shadows)
@@ -339,7 +387,7 @@ export const processImage = async (
 
     // Small additive toe lift (fixes "pure black never lifts" when using multiplicative detail preservation).
     // This intentionally behaves a bit like a tiny built-in "Blacks +" when Shadows is positive.
-    const toeFromShadows = Math.max(0.0, S) * 0.0010; // ~0.0 to ~0.0010 linear
+    const toeFromShadows = Math.max(0.0, S) * toeFromShadowsBase; // adaptive deep lift
     const toeFromBlacks = Math.max(0.0, B) * 0.0020;  // allow explicit matte toe via Blacks +
     const toeLiftLin = (toeFromShadows + toeFromBlacks) * toeMask;
 
