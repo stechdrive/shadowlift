@@ -4,6 +4,7 @@ import Editor from './components/Editor';
 import BatchProcessor from './components/BatchProcessor';
 import { AppMode } from './types';
 import { Camera } from 'lucide-react';
+import { filterAcceptedFiles } from './constants';
 
 const App: React.FC = () => {
   const [files, setFiles] = useState<File[]>([]);
@@ -36,9 +37,7 @@ const App: React.FC = () => {
     // Dropzone component stops propagation, so this only runs if dropped outside Dropzone 
     // (e.g. in Editor mode, or blank areas).
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const droppedFiles = (Array.from(e.dataTransfer.files) as File[]).filter((file) =>
-        file.type.startsWith('image/')
-      );
+      const droppedFiles = filterAcceptedFiles(Array.from(e.dataTransfer.files) as File[]);
       
       if (droppedFiles.length > 0) {
         handleFilesDropped(droppedFiles);

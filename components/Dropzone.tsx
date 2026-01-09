@@ -1,6 +1,7 @@
 import React, { useCallback } from 'react';
 import { Upload, Image as ImageIcon } from 'lucide-react';
 import { clsx } from 'clsx';
+import { ACCEPTED_MIME_TYPES_STRING, filterAcceptedFiles } from '../constants';
 
 interface DropzoneProps {
   onFilesDropped: (files: File[]) => void;
@@ -12,9 +13,7 @@ const Dropzone: React.FC<DropzoneProps> = ({ onFilesDropped }) => {
       e.preventDefault();
       e.stopPropagation();
 
-      const droppedFiles = (Array.from(e.dataTransfer.files) as File[]).filter((file) =>
-        file.type.startsWith('image/')
-      );
+      const droppedFiles = filterAcceptedFiles(Array.from(e.dataTransfer.files) as File[]);
       if (droppedFiles.length > 0) {
         onFilesDropped(droppedFiles);
       }
@@ -29,9 +28,7 @@ const Dropzone: React.FC<DropzoneProps> = ({ onFilesDropped }) => {
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
-      const selectedFiles = Array.from(e.target.files).filter((file) =>
-        file.type.startsWith('image/')
-      );
+      const selectedFiles = filterAcceptedFiles(Array.from(e.target.files));
       if (selectedFiles.length > 0) {
         onFilesDropped(selectedFiles);
       }
@@ -52,7 +49,7 @@ const Dropzone: React.FC<DropzoneProps> = ({ onFilesDropped }) => {
       <input
         type="file"
         multiple
-        accept="image/jpeg,image/png,image/webp,image/tiff"
+        accept={ACCEPTED_MIME_TYPES_STRING}
         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
         onChange={handleFileInput}
       />

@@ -5,6 +5,7 @@ import { DEFAULT_SETTINGS, LIMITS, RESET_SETTINGS } from '../constants';
 import Slider from './Slider';
 import { processImage, loadImage, createResizedImage } from '../services/imageProcessor';
 import saveAs from 'file-saver';
+import { useHistoryState } from '../hooks/useHistoryState';
 
 interface EditorProps {
   file: File;
@@ -12,12 +13,16 @@ interface EditorProps {
 }
 
 const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
-  // Main settings state (live)
-  const [settings, setSettings] = useState<ImageSettings>(DEFAULT_SETTINGS);
-  
-  // History management
-  const [history, setHistory] = useState<ImageSettings[]>([DEFAULT_SETTINGS]);
-  const [historyIndex, setHistoryIndex] = useState(0);
+  const {
+    state: settings,
+    setState: setSettings,
+    commit: commitSettings,
+    undo: undoSettings,
+    redo: redoSettings,
+    reset: resetSettings,
+    canUndo,
+    canRedo,
+  } = useHistoryState<ImageSettings>(DEFAULT_SETTINGS);
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [originalPreviewUrl, setOriginalPreviewUrl] = useState<string | null>(null);
@@ -146,34 +151,19 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
 
   // Commit current settings to history (called on slider release)
   const handleSettingCommit = () => {
-    // Prevent duplicate history entries if value hasn't effectively changed from history tip
-    const currentHistoryHead = history[historyIndex];
-    if (JSON.stringify(currentHistoryHead) === JSON.stringify(settings)) {
-      return;
-    }
-
-    const newHistory = history.slice(0, historyIndex + 1);
-    newHistory.push(settings);
-    setHistory(newHistory);
-    setHistoryIndex(newHistory.length - 1);
+    commitSettings(settings);
   };
 
   const handleUndo = () => {
-    if (historyIndex > 0) {
-      const newIndex = historyIndex - 1;
-      const prevSettings = history[newIndex];
-      setHistoryIndex(newIndex);
-      setSettings(prevSettings);
+    const prevSettings = undoSettings();
+    if (prevSettings) {
       updatePreview(prevSettings);
     }
   };
 
   const handleRedo = () => {
-    if (historyIndex < history.length - 1) {
-      const newIndex = historyIndex + 1;
-      const nextSettings = history[newIndex];
-      setHistoryIndex(newIndex);
-      setSettings(nextSettings);
+    const nextSettings = redoSettings();
+    if (nextSettings) {
       updatePreview(nextSettings);
     }
   };
@@ -198,19 +188,9 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
   };
 
   const handleReset = () => {
-      // Commit reset to history as well
-      const newSettings = RESET_SETTINGS;
-      setSettings(newSettings);
+      const newSettings = resetSettings(RESET_SETTINGS);
       updatePreview(newSettings);
-      
-      const newHistory = history.slice(0, historyIndex + 1);
-      newHistory.push(newSettings);
-      setHistory(newHistory);
-      setHistoryIndex(newHistory.length - 1);
   };
-
-  const canUndo = historyIndex > 0;
-  const canRedo = historyIndex < history.length - 1;
 
   // Compare button handler (Toggle)
   const toggleCompare = () => setIsCompareView(prev => !prev);

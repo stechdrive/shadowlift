@@ -32,3 +32,9 @@ export const ACCEPTED_TYPES = {
   'image/webp': ['.webp'],
   'image/tiff': ['.tif', '.tiff'], 
 };
+
+export const ACCEPTED_MIME_TYPES = Object.keys(ACCEPTED_TYPES);
+export const ACCEPTED_MIME_TYPES_STRING = ACCEPTED_MIME_TYPES.join(',');
+
+export const filterAcceptedFiles = (files: File[]): File[] =>
+  files.filter((file) => ACCEPTED_MIME_TYPES.includes(file.type));
