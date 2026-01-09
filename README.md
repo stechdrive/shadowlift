@@ -16,8 +16,5 @@ ShadowLift is a simple, in-browser image adjustment app focused on shadow correc
 2. For a single image, adjust in the editor.
 3. For multiple images, run batch correction and download.
 
-## ライセンス
-MIT License © stechdrive
-
 ## License
 MIT License © stechdrive
