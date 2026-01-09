@@ -248,14 +248,21 @@ export const processImage = async (
     }
 
     if (B !== 0) {
-        const blackStrength = Math.abs(B) * 1.3;
-        const blackExponent = B > 0
-            ? 1.0 / (1.0 + blackStrength)
-            : 1.0 + blackStrength;
         const yClamped = clamp01(y_target_lin);
-        const shadowMask = 1.0 - smoothstep(0.0, 0.35, yClamped);
-        const mapped = Math.pow(yClamped, blackExponent);
-        y_target_lin = yClamped * (1.0 - shadowMask) + mapped * shadowMask;
+        const shadowMask = 1.0 - smoothstep(0.0, 0.22, yClamped);
+
+        if (B > 0) {
+            // Subtle black point lift focused on the deepest shadows (not a midtone lift).
+            const blackStrength = B * 0.7;
+            const lift = blackStrength * 0.06 * Math.pow(shadowMask, 1.6) * (1.0 - yClamped);
+            const mapped = yClamped + lift;
+            y_target_lin = yClamped * (1.0 - shadowMask) + mapped * shadowMask;
+        } else {
+            const blackStrength = Math.abs(B) * 1.3;
+            const blackExponent = 1.0 + blackStrength;
+            const mapped = Math.pow(yClamped, blackExponent);
+            y_target_lin = yClamped * (1.0 - shadowMask) + mapped * shadowMask;
+        }
     }
 
     // E. Contrast (Pivot)
