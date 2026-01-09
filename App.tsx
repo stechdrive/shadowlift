@@ -124,7 +124,8 @@ const App: React.FC = () => {
           </main>
           
           <footer className="py-6 text-center text-gray-600 text-xs">
-            © 2026 stechdrive. 画像はサーバーに送信されません。 v{appVersion}
+            <div>© 2026 stechdrive. v{appVersion}</div>
+            <div className="mt-1">処理はブラウザで完結し、画像が外部送信されることはありません。</div>
           </footer>
         </div>
       )}
