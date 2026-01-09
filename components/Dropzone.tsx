@@ -2,23 +2,34 @@ import React, { useCallback } from 'react';
 import { Upload, Image as ImageIcon } from 'lucide-react';
 import { clsx } from 'clsx';
 import { ACCEPTED_MIME_TYPES_STRING, filterAcceptedFiles } from '../constants';
+import { DragAndDropIssue, getFilesFromDataTransfer } from '../services/dragAndDrop';
 
 interface DropzoneProps {
   onFilesDropped: (files: File[]) => void;
+  onDropIssues?: (issues: DragAndDropIssue[]) => void;
 }
 
-const Dropzone: React.FC<DropzoneProps> = ({ onFilesDropped }) => {
+const Dropzone: React.FC<DropzoneProps> = ({ onFilesDropped, onDropIssues }) => {
   const handleDrop = useCallback(
-    (e: React.DragEvent<HTMLDivElement>) => {
+    async (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
       e.stopPropagation();
 
-      const droppedFiles = filterAcceptedFiles(Array.from(e.dataTransfer.files) as File[]);
-      if (droppedFiles.length > 0) {
-        onFilesDropped(droppedFiles);
+      try {
+        const { files, issues } = await getFilesFromDataTransfer(e.dataTransfer);
+        if (issues.length > 0) {
+          onDropIssues?.(issues);
+        }
+        const acceptedFiles = filterAcceptedFiles(files);
+        if (acceptedFiles.length > 0) {
+          onFilesDropped(acceptedFiles);
+        }
+      } catch (error) {
+        console.error('Failed to read dropped files', error);
+        onDropIssues?.([{ kind: 'file', name: 'ドロップ', detail: '読み込みに失敗しました。' }]);
       }
     },
-    [onFilesDropped]
+    [onDropIssues, onFilesDropped]
   );
 
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {

@@ -27,6 +27,8 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [originalPreviewUrl, setOriginalPreviewUrl] = useState<string | null>(null);
   const [isCompareView, setIsCompareView] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
   
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -61,6 +63,20 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
   // Initialize
   useEffect(() => {
     let active = true;
+    setLoadError(null);
+    setPreviewError(null);
+    originalFullImageRef.current = null;
+    previewSourceImageRef.current = null;
+    setPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      previewUrlRef.current = null;
+      return null;
+    });
+    setOriginalPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      originalPreviewUrlRef.current = null;
+      return null;
+    });
     const init = async () => {
       try {
         const img = await loadImage(file.file);
@@ -99,6 +115,10 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
         updatePreview(DEFAULT_SETTINGS); // Apply default Shadow +70
       } catch (error) {
         console.error("Failed to load image", error);
+        if (active) {
+          setLoadError('画像の読み込みに失敗しました。');
+          setIsProcessing(false);
+        }
       }
     };
     init();
@@ -131,6 +151,7 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
           URL.revokeObjectURL(url);
           return;
         }
+        setPreviewError(null);
         setPreviewUrl((prev) => {
           if (prev) URL.revokeObjectURL(prev);
           previewUrlRef.current = url;
@@ -138,6 +159,9 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
         });
       } catch (err) {
         console.error(err);
+        if (isMountedRef.current) {
+          setPreviewError('プレビュー生成に失敗しました。');
+        }
       } finally {
         if (isMountedRef.current) {
           setIsProcessing(false);
@@ -158,19 +182,19 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
     commitSettings(settings);
   };
 
-  const handleUndo = () => {
+  const handleUndo = useCallback(() => {
     const prevSettings = undoSettings();
     if (prevSettings) {
       updatePreview(prevSettings);
     }
-  };
+  }, [undoSettings, updatePreview]);
 
-  const handleRedo = () => {
+  const handleRedo = useCallback(() => {
     const nextSettings = redoSettings();
     if (nextSettings) {
       updatePreview(nextSettings);
     }
-  };
+  }, [redoSettings, updatePreview]);
 
   const handleDownload = async () => {
     if (!originalFullImageRef.current) return;
@@ -199,6 +223,37 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
   // Compare button handler (Toggle)
   const toggleCompare = () => setIsCompareView(prev => !prev);
 
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const isModifierPressed = event.ctrlKey || event.metaKey;
+      if (!isModifierPressed || event.altKey) return;
+
+      if (event.key.toLowerCase() !== 'z') return;
+
+      const target = event.target as HTMLElement | null;
+      if (target) {
+        const tagName = target.tagName;
+        const isEditable = target.isContentEditable;
+        if (tagName === 'INPUT') {
+          const input = target as HTMLInputElement;
+          if (input.type !== 'range') return;
+        } else if (tagName === 'TEXTAREA' || tagName === 'SELECT' || isEditable) {
+          return;
+        }
+      }
+
+      event.preventDefault();
+      if (event.shiftKey) {
+        handleRedo();
+        return;
+      }
+      handleUndo();
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleRedo, handleUndo]);
+
   return (
     <div className="flex flex-col md:flex-row h-screen bg-gray-950 text-gray-200">
       {/* Header / Toolbar for mobile */}
@@ -221,7 +276,17 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
 
       {/* Main Preview Area */}
       <div className="flex-1 relative bg-gray-900 flex items-center justify-center p-4 overflow-hidden select-none">
-        {previewUrl ? (
+        {loadError ? (
+          <div className="flex flex-col items-center text-center">
+            <p className="text-red-400 font-medium mb-3">{loadError}</p>
+            <button
+              onClick={onBack}
+              className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded text-sm text-white"
+            >
+              戻る
+            </button>
+          </div>
+        ) : previewUrl ? (
           <>
             <img
               src={isCompareView && originalPreviewUrl ? originalPreviewUrl : previewUrl}
@@ -229,6 +294,12 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
               className="max-w-full max-h-full object-contain shadow-2xl"
               style={{ opacity: isProcessing ? 0.9 : 1, transition: 'opacity 0.1s' }}
             />
+
+            {previewError && (
+              <div className="absolute top-16 left-1/2 transform -translate-x-1/2 bg-red-600/90 text-white px-4 py-2 rounded-full text-xs font-semibold shadow-lg border border-white/20 backdrop-blur-md z-20">
+                {previewError}
+              </div>
+            )}
             
             {/* Compare Indicator Badge */}
             {isCompareView && (
@@ -252,6 +323,16 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
                 </button>
             </div>
           </>
+        ) : previewError ? (
+            <div className="flex flex-col items-center text-center">
+                <p className="text-red-400 font-medium mb-3">{previewError}</p>
+                <button
+                  onClick={handleReset}
+                  className="px-4 py-2 bg-gray-800 hover:bg-gray-700 rounded text-sm text-white"
+                >
+                  設定をリセット
+                </button>
+            </div>
         ) : (
             <div className="flex flex-col items-center">
                 <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
@@ -279,8 +360,7 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
       {/* Sidebar Controls */}
       <div className="w-full md:w-80 bg-gray-850 border-l border-gray-800 flex flex-col z-10">
         <div className="p-4 border-b border-gray-800">
-            <div className="flex justify-between items-center mb-4">
-                <h2 className="font-semibold text-sm text-gray-300 uppercase tracking-widest">ライト (Light)</h2>
+            <div className="flex justify-end items-center mb-4">
                 <button 
                     onClick={handleReset}
                     className="text-xs text-gray-500 hover:text-white flex items-center gap-1 transition-colors"
@@ -378,7 +458,7 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
              ) : (
                  <>
                     <Download size={18} />
-                    保存 (最高画質)
+                    保存
                  </>
              )}
            </button>

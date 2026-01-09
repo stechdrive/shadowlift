@@ -1,16 +1,22 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Dropzone from './components/Dropzone';
 import Editor from './components/Editor';
 import BatchProcessor from './components/BatchProcessor';
 import { AppFile, AppMode } from './types';
 import { Camera } from 'lucide-react';
 import { filterAcceptedFiles, getMimeTypeForFile, isHeicFile } from './constants';
+import { DragAndDropIssue, getFilesFromDataTransfer } from './services/dragAndDrop';
 
 const App: React.FC = () => {
   const [files, setFiles] = useState<AppFile[]>([]);
   const [mode, setMode] = useState<AppMode>(AppMode.IDLE);
+  const [dropNotice, setDropNotice] = useState<{
+    message: string;
+    tone: 'info' | 'warning' | 'error';
+  } | null>(null);
   const appVersion = __APP_VERSION__;
   const lastCheckedRef = useRef(0);
+  const noticeTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const baseUrl = new URL(import.meta.env.BASE_URL, window.location.origin).toString();
@@ -43,6 +49,38 @@ const App: React.FC = () => {
     return () => {};
   }, [appVersion]);
 
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) {
+        window.clearTimeout(noticeTimerRef.current);
+      }
+    };
+  }, []);
+
+  const showNotice = useCallback((message: string, tone: 'info' | 'warning' | 'error' = 'warning') => {
+    setDropNotice({ message, tone });
+    if (noticeTimerRef.current) {
+      window.clearTimeout(noticeTimerRef.current);
+    }
+    noticeTimerRef.current = window.setTimeout(() => {
+      setDropNotice(null);
+    }, 6000);
+  }, []);
+
+  const formatIssueSummary = useCallback((issues: DragAndDropIssue[]) => {
+    const names = issues.map((issue) => issue.name).filter((name): name is string => Boolean(name));
+    if (names.length === 0) return '';
+    const sample = names.slice(0, 3).join('、');
+    const suffix = names.length > 3 ? ' ほか' : '';
+    return ` (${sample}${suffix})`;
+  }, []);
+
+  const handleDropIssues = useCallback((issues: DragAndDropIssue[]) => {
+    if (issues.length === 0) return;
+    const summary = formatIssueSummary(issues);
+    showNotice(`読み込みに失敗した項目が${issues.length}件あります${summary}。`, 'warning');
+  }, [formatIssueSummary, showNotice]);
+
   const dropCounterRef = useRef(0);
 
   const convertHeicToPng = async (file: File): Promise<File> => {
@@ -62,8 +100,11 @@ const App: React.FC = () => {
     });
   };
 
-  const normalizeDroppedFiles = async (droppedFiles: File[]): Promise<AppFile[]> => {
+  const normalizeDroppedFiles = async (
+    droppedFiles: File[]
+  ): Promise<{ normalized: AppFile[]; failedConversions: string[] }> => {
     const normalized: AppFile[] = [];
+    const failedConversions: string[] = [];
     for (const file of droppedFiles) {
       if (isHeicFile(file)) {
         try {
@@ -76,6 +117,7 @@ const App: React.FC = () => {
           });
         } catch (error) {
           console.error('HEIC/HEIF conversion failed', error);
+          failedConversions.push(file.name);
         }
       } else {
         const outputType = getMimeTypeForFile(file) ?? 'image/png';
@@ -86,13 +128,18 @@ const App: React.FC = () => {
         });
       }
     }
-    return normalized;
+    return { normalized, failedConversions };
   };
 
   const handleFilesDropped = async (droppedFiles: File[]) => {
     const dropId = ++dropCounterRef.current;
-    const normalizedFiles = await normalizeDroppedFiles(droppedFiles);
+    const { normalized: normalizedFiles, failedConversions } = await normalizeDroppedFiles(droppedFiles);
     if (dropId !== dropCounterRef.current) return;
+    if (failedConversions.length > 0) {
+      const sample = failedConversions.slice(0, 3).join('、');
+      const suffix = failedConversions.length > 3 ? ' ほか' : '';
+      showNotice(`HEIC/HEIFの変換に失敗したファイルが${failedConversions.length}件あります (${sample}${suffix})。`, 'warning');
+    }
     if (normalizedFiles.length === 0) return;
     setFiles(normalizedFiles);
     if (normalizedFiles.length === 1) {
@@ -113,18 +160,25 @@ const App: React.FC = () => {
     e.preventDefault();
   };
 
-  const handleGlobalDrop = (e: React.DragEvent<HTMLDivElement>) => {
+  const handleGlobalDrop = async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     
     // If files are dropped, we process them.
     // Dropzone component stops propagation, so this only runs if dropped outside Dropzone 
     // (e.g. in Editor mode, or blank areas).
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const droppedFiles = filterAcceptedFiles(Array.from(e.dataTransfer.files) as File[]);
-      
-      if (droppedFiles.length > 0) {
-        handleFilesDropped(droppedFiles);
+    try {
+      const { files: droppedFiles, issues } = await getFilesFromDataTransfer(e.dataTransfer);
+      if (issues.length > 0) {
+        handleDropIssues(issues);
       }
+      const acceptedFiles = filterAcceptedFiles(droppedFiles);
+
+      if (acceptedFiles.length > 0) {
+        handleFilesDropped(acceptedFiles);
+      }
+    } catch (error) {
+      console.error('Failed to read dropped files', error);
+      showNotice('ドロップされたファイルの読み込みに失敗しました。', 'error');
     }
   };
 
@@ -134,6 +188,32 @@ const App: React.FC = () => {
       onDragOver={handleGlobalDragOver}
       onDrop={handleGlobalDrop}
     >
+      {dropNotice && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-[90vw] max-w-xl">
+          <div
+            className={`flex items-start justify-between gap-4 rounded-lg border px-4 py-3 shadow-xl ${
+              dropNotice.tone === 'error'
+                ? 'bg-red-950/90 border-red-700 text-red-100'
+                : dropNotice.tone === 'info'
+                ? 'bg-blue-950/90 border-blue-700 text-blue-100'
+                : 'bg-amber-950/90 border-amber-700 text-amber-100'
+            }`}
+          >
+            <div className="text-sm leading-relaxed">{dropNotice.message}</div>
+            <button
+              onClick={() => {
+                if (noticeTimerRef.current) {
+                  window.clearTimeout(noticeTimerRef.current);
+                }
+                setDropNotice(null);
+              }}
+              className="text-xs text-white/70 hover:text-white transition"
+            >
+              閉じる
+            </button>
+          </div>
+        </div>
+      )}
       {mode === AppMode.IDLE && (
         <div className="container mx-auto px-4 h-screen flex flex-col">
           <header className="py-6 flex items-center justify-center gap-3">
@@ -150,7 +230,7 @@ const App: React.FC = () => {
             </div>
             
             <div className="w-full h-80">
-              <Dropzone onFilesDropped={handleFilesDropped} />
+              <Dropzone onFilesDropped={handleFilesDropped} onDropIssues={handleDropIssues} />
             </div>
 
             <div className="mt-12 grid grid-cols-2 md:grid-cols-4 gap-6 text-center text-sm text-gray-500">

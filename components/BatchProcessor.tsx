@@ -15,35 +15,64 @@ const BatchProcessor: React.FC<BatchProcessorProps> = ({ files, onReset }) => {
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState<'processing' | 'zipping' | 'complete' | 'error'>('processing');
   const [zipBlob, setZipBlob] = useState<Blob | null>(null);
+  const [failedFiles, setFailedFiles] = useState<{ name: string; reason: string }[]>([]);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   useEffect(() => {
     const processFiles = async () => {
       try {
         const zip = new JSZip();
         let completed = 0;
+        let successCount = 0;
+        const failures: { name: string; reason: string }[] = [];
 
         for (const file of files) {
-          // Sequential processing to prevent memory crash
-          const img = await loadImage(file.file);
-          // Apply default Shadows +70
-          const processedBlob = await processImage(
-            img,
-            DEFAULT_SETTINGS,
-            file.outputType
-          );
-          
-          zip.file(`edited_${file.outputName}`, processedBlob);
-          
-          completed++;
-          setProgress(Math.round((completed / files.length) * 100));
+          try {
+            // Sequential processing to prevent memory crash
+            const img = await loadImage(file.file);
+            // Apply default Shadows +70
+            const processedBlob = await processImage(
+              img,
+              DEFAULT_SETTINGS,
+              file.outputType
+            );
+            
+            zip.file(`edited_${file.outputName}`, processedBlob);
+            successCount++;
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : '不明なエラー';
+            failures.push({ name: file.outputName, reason });
+            console.error('Failed to process file', file.outputName, error);
+          } finally {
+            completed++;
+            setProgress(Math.round((completed / files.length) * 100));
+          }
         }
 
-        setStatus('zipping');
-        const content = await zip.generateAsync({ type: 'blob' });
-        setZipBlob(content);
-        setStatus('complete');
-      } catch (err) {
-        console.error(err);
+        if (failures.length > 0) {
+          setFailedFiles(failures);
+        }
+
+        if (successCount === 0) {
+          setErrorMessage('すべての画像の処理に失敗しました。');
+          setStatus('error');
+          return;
+        }
+
+        try {
+          setStatus('zipping');
+          const content = await zip.generateAsync({ type: 'blob' });
+          setZipBlob(content);
+          setStatus('complete');
+        } catch (error) {
+          console.error('Failed to generate ZIP', error);
+          setErrorMessage('ZIPの作成に失敗しました。');
+          setStatus('error');
+        }
+      } catch (error) {
+        console.error('Batch processing failed', error);
+        setErrorMessage('処理中に問題が発生しました。');
         setStatus('error');
       }
     };
@@ -54,8 +83,14 @@ const BatchProcessor: React.FC<BatchProcessorProps> = ({ files, onReset }) => {
 
   const handleDownload = () => {
     if (zipBlob) {
-      const date = new Date().toISOString().slice(0, 10);
-      saveAs(zipBlob, `adjusted_photos_${date}.zip`);
+      try {
+        const date = new Date().toISOString().slice(0, 10);
+        saveAs(zipBlob, `adjusted_photos_${date}.zip`);
+        setDownloadError(null);
+      } catch (error) {
+        console.error('Failed to save ZIP', error);
+        setDownloadError('ダウンロードに失敗しました。');
+      }
     }
   };
 
@@ -90,7 +125,10 @@ const BatchProcessor: React.FC<BatchProcessorProps> = ({ files, onReset }) => {
           <>
             <CheckCircle className="w-16 h-16 text-green-500 mx-auto mb-6" />
             <h2 className="text-2xl font-bold text-white mb-2">完了</h2>
-            <p className="text-gray-400 mb-8">{files.length}枚の画像を処理しました。</p>
+            <p className="text-gray-400 mb-8">
+              {files.length - failedFiles.length}枚の画像を処理しました。
+              {failedFiles.length > 0 && ` ${failedFiles.length}枚はスキップしました。`}
+            </p>
             
             <button
               onClick={handleDownload}
@@ -99,6 +137,23 @@ const BatchProcessor: React.FC<BatchProcessorProps> = ({ files, onReset }) => {
               <Download size={20} />
               一括ダウンロード (ZIP)
             </button>
+
+            {downloadError && (
+              <p className="text-sm text-red-400 mb-4">{downloadError}</p>
+            )}
+
+            {failedFiles.length > 0 && (
+              <div className="mb-6 text-left bg-gray-900/60 border border-gray-800 rounded-lg p-3 text-xs text-gray-400">
+                <p className="text-gray-300 font-semibold mb-2">処理できなかったファイル</p>
+                <ul className="max-h-32 overflow-y-auto space-y-1">
+                  {failedFiles.map((file, index) => (
+                    <li key={`${file.name}-${index}`} className="truncate">
+                      {file.name} - {file.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             
             <button
               onClick={onReset}
@@ -113,7 +168,21 @@ const BatchProcessor: React.FC<BatchProcessorProps> = ({ files, onReset }) => {
             <>
                 <AlertCircle className="w-16 h-16 text-red-500 mx-auto mb-6" />
                 <h2 className="text-2xl font-bold text-white mb-2">エラー発生</h2>
-                <p className="text-gray-400 mb-6">処理中に問題が発生しました。</p>
+                <p className="text-gray-400 mb-6">
+                  {errorMessage ?? '処理中に問題が発生しました。'}
+                </p>
+                {failedFiles.length > 0 && (
+                  <div className="mb-6 text-left bg-gray-900/60 border border-gray-800 rounded-lg p-3 text-xs text-gray-400">
+                    <p className="text-gray-300 font-semibold mb-2">処理できなかったファイル</p>
+                    <ul className="max-h-32 overflow-y-auto space-y-1">
+                      {failedFiles.map((file, index) => (
+                        <li key={`${file.name}-${index}`} className="truncate">
+                          {file.name} - {file.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 <button
                     onClick={onReset}
                     className="px-6 py-2 bg-gray-800 hover:bg-gray-700 rounded text-white"
