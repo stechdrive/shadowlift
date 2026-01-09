@@ -194,10 +194,14 @@ const createToneMapper = (settings: ImageSettings) => {
 
         // Adobe Basic panel target ranges (display-referred):
         // Shadows: 10-30%, Highlights: 70-90%, Whites: 90-100%, Blacks: 0-10%, Contrast: 30-70%.
-        // Shadow range: widen toward midtones and gate deep blacks to reduce over-lift.
+        // Shadow range: widen toward midtones, gate deep blacks, and damp the low-mid band
+        // to better match Lightroom's Shadows response.
         const wShadowsBase = 1.0 - smoothstep(0.10, 0.60, yDisp);
         const shadowGate = smoothstep(0.02, 0.12, yDisp);
-        const wShadows = wShadowsBase * shadowGate;
+        const shadowNotch =
+            smoothstep(0.05, 0.12, yDisp) *
+            (1.0 - smoothstep(0.12, 0.22, yDisp));
+        const wShadows = wShadowsBase * shadowGate * (1.0 - 0.4 * shadowNotch);
         const wHighlights = smoothstep(0.70, 0.90, yDisp);
         const wWhites = smoothstep(0.90, 1.00, yDisp);
         const wBlacks = 1.0 - smoothstep(0.00, 0.10, yDisp);
@@ -214,7 +218,7 @@ const createToneMapper = (settings: ImageSettings) => {
             const yShadow = Math.pow(yDisp, shadowPower);
             yDisp = lerp(yDisp, yShadow, Math.abs(S) * wShadows);
             // Gentle midtone lift to match Lightroom's Shadows behavior at high values.
-            yDisp += Math.abs(S) * 0.05 * wMid;
+            yDisp += Math.abs(S) * 0.07 * wMid;
         }
 
         if (H !== 0) {
