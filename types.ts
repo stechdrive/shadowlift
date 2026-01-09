@@ -16,6 +16,12 @@ export interface ProcessedFile {
   settings: ImageSettings;
 }
 
+export interface AppFile {
+  file: File;
+  outputName: string;
+  outputType: string;
+}
+
 export enum AppMode {
   IDLE = 'IDLE',
   EDITOR = 'EDITOR',

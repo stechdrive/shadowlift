@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Download, ArrowLeft, RotateCcw, Undo2, Redo2, Eye, EyeOff } from 'lucide-react';
-import { ImageSettings } from '../types';
+import { AppFile, ImageSettings } from '../types';
 import { DEFAULT_SETTINGS, LIMITS, RESET_SETTINGS } from '../constants';
 import Slider from './Slider';
 import { processImage, loadImage, createResizedImage } from '../services/imageProcessor';
@@ -8,7 +8,7 @@ import saveAs from 'file-saver';
 import { useHistoryState } from '../hooks/useHistoryState';
 
 interface EditorProps {
-  file: File;
+  file: AppFile;
   onBack: () => void;
 }
 
@@ -63,7 +63,7 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
     let active = true;
     const init = async () => {
       try {
-        const img = await loadImage(file);
+        const img = await loadImage(file.file);
         if (!active) return;
         
         originalFullImageRef.current = img;
@@ -93,7 +93,7 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
                 } else {
                     URL.revokeObjectURL(url);
                 }
-            }, file.type);
+            }, file.file.type);
         }
         
         updatePreview(DEFAULT_SETTINGS); // Apply default Shadow +70
@@ -121,7 +121,11 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
       
       try {
         // Process the RESIZED image for preview
-        const blob = await processImage(previewSourceImageRef.current, currentSettings, file.type);
+        const blob = await processImage(
+          previewSourceImageRef.current,
+          currentSettings,
+          file.outputType
+        );
         const url = URL.createObjectURL(blob);
         if (!isMountedRef.current) {
           URL.revokeObjectURL(url);
@@ -140,7 +144,7 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
         }
       }
     }, 20); // 20ms debounce for smoother live preview
-  }, [file.type]);
+  }, [file.outputType]);
 
   // Update live settings and preview without committing to history
   const handleSettingChange = (key: keyof ImageSettings, value: number) => {
@@ -176,8 +180,8 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
     setTimeout(async () => {
         try {
             // Process the FULL RESOLUTION image for download
-            const blob = await processImage(originalFullImageRef.current!, settings, file.type);
-            saveAs(blob, `edited_${file.name}`);
+            const blob = await processImage(originalFullImageRef.current!, settings, file.outputType);
+            saveAs(blob, `edited_${file.outputName}`);
         } catch (e) {
             console.error(e);
             alert("保存に失敗しました");

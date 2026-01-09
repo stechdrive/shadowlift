@@ -48,6 +48,16 @@ export const HEIC_MIME_TYPES = [
 ];
 export const HEIC_EXTENSIONS = ['.heic', '.heif'];
 
+const EXTENSION_TO_MIME = Object.entries(ACCEPTED_TYPES).reduce<Record<string, string>>(
+  (acc, [mime, extensions]) => {
+    extensions.forEach((extension) => {
+      acc[extension] = mime;
+    });
+    return acc;
+  },
+  {}
+);
+
 const getLowercaseExtension = (name: string): string | null => {
   const index = name.lastIndexOf('.');
   if (index === -1) return null;
@@ -70,3 +80,10 @@ export const filterAcceptedFiles = (files: File[]): File[] =>
     const extension = getLowercaseExtension(file.name);
     return extension !== null && ACCEPTED_EXTENSIONS.includes(extension);
   });
+
+export const getMimeTypeForFile = (file: File): string | null => {
+  if (file.type) return file.type;
+  const extension = getLowercaseExtension(file.name);
+  if (!extension) return null;
+  return EXTENSION_TO_MIME[extension] ?? null;
+};

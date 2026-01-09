@@ -2,12 +2,12 @@ import React, { useEffect, useRef, useState } from 'react';
 import Dropzone from './components/Dropzone';
 import Editor from './components/Editor';
 import BatchProcessor from './components/BatchProcessor';
-import { AppMode } from './types';
+import { AppFile, AppMode } from './types';
 import { Camera } from 'lucide-react';
-import { filterAcceptedFiles, isHeicFile } from './constants';
+import { filterAcceptedFiles, getMimeTypeForFile, isHeicFile } from './constants';
 
 const App: React.FC = () => {
-  const [files, setFiles] = useState<File[]>([]);
+  const [files, setFiles] = useState<AppFile[]>([]);
   const [mode, setMode] = useState<AppMode>(AppMode.IDLE);
   const appVersion = __APP_VERSION__;
   const lastCheckedRef = useRef(0);
@@ -45,35 +45,45 @@ const App: React.FC = () => {
 
   const dropCounterRef = useRef(0);
 
-  const convertHeicToJpeg = async (file: File): Promise<File> => {
+  const convertHeicToPng = async (file: File): Promise<File> => {
     const heic2anyModule = await import('heic2any');
     const heic2any = heic2anyModule.default;
     const result = await heic2any({
       blob: file,
-      toType: 'image/jpeg',
-      quality: 0.92,
+      toType: 'image/png',
     });
     const blob = Array.isArray(result) ? result[0] : result;
-    const jpegBlob =
-      blob instanceof Blob ? blob : new Blob([blob], { type: 'image/jpeg' });
+    const pngBlob =
+      blob instanceof Blob ? blob : new Blob([blob], { type: 'image/png' });
     const baseName = file.name.replace(/\.(heic|heif)$/i, '') || file.name;
-    return new File([jpegBlob], `${baseName}.jpg`, {
-      type: 'image/jpeg',
+    return new File([pngBlob], `${baseName}.png`, {
+      type: 'image/png',
       lastModified: file.lastModified,
     });
   };
 
-  const normalizeDroppedFiles = async (droppedFiles: File[]): Promise<File[]> => {
-    const normalized: File[] = [];
+  const normalizeDroppedFiles = async (droppedFiles: File[]): Promise<AppFile[]> => {
+    const normalized: AppFile[] = [];
     for (const file of droppedFiles) {
       if (isHeicFile(file)) {
         try {
-          normalized.push(await convertHeicToJpeg(file));
+          const pngFile = await convertHeicToPng(file);
+          const baseName = file.name.replace(/\.(heic|heif)$/i, '') || file.name;
+          normalized.push({
+            file: pngFile,
+            outputName: `${baseName}.jpg`,
+            outputType: 'image/jpeg',
+          });
         } catch (error) {
           console.error('HEIC/HEIF conversion failed', error);
         }
       } else {
-        normalized.push(file);
+        const outputType = getMimeTypeForFile(file) ?? 'image/png';
+        normalized.push({
+          file,
+          outputName: file.name,
+          outputType,
+        });
       }
     }
     return normalized;

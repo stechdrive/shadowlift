@@ -4,9 +4,10 @@ import saveAs from 'file-saver';
 import { DEFAULT_SETTINGS } from '../constants';
 import { loadImage, processImage } from '../services/imageProcessor';
 import { Loader2, CheckCircle, Download, AlertCircle } from 'lucide-react';
+import { AppFile } from '../types';
 
 interface BatchProcessorProps {
-  files: File[];
+  files: AppFile[];
   onReset: () => void;
 }
 
@@ -23,11 +24,15 @@ const BatchProcessor: React.FC<BatchProcessorProps> = ({ files, onReset }) => {
 
         for (const file of files) {
           // Sequential processing to prevent memory crash
-          const img = await loadImage(file);
+          const img = await loadImage(file.file);
           // Apply default Shadows +70
-          const processedBlob = await processImage(img, DEFAULT_SETTINGS, file.type);
+          const processedBlob = await processImage(
+            img,
+            DEFAULT_SETTINGS,
+            file.outputType
+          );
           
-          zip.file(`edited_${file.name}`, processedBlob);
+          zip.file(`edited_${file.outputName}`, processedBlob);
           
           completed++;
           setProgress(Math.round((completed / files.length) * 100));
