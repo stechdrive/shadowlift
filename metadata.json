@@ -1,0 +1,5 @@
+{
+  "name": "ShadowLift",
+  "description": "Adobe Lightroomのライト補正（露光量、コントラスト、ハイライト、シャドウなど）をWebブラウザ上で再現した画像調整アプリ。複数画像のシャドウ一括補正機能付き。",
+  "requestFramePermissions": []
+}
