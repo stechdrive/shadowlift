@@ -1,15 +1,23 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Dropzone from './components/Dropzone';
+import AlgorithmSelect from './components/AlgorithmSelect';
 import Editor from './components/Editor';
 import BatchProcessor from './components/BatchProcessor';
-import { AppFile, AppMode } from './types';
+import { AppFile, AppMode, ToneAlgorithm } from './types';
 import { Camera } from 'lucide-react';
-import { filterAcceptedFiles, getMimeTypeForFile, isHeicFile } from './constants';
+import {
+  DEFAULT_TONE_ALGORITHM,
+  TONE_ALGORITHM_OPTIONS,
+  filterAcceptedFiles,
+  getMimeTypeForFile,
+  isHeicFile,
+} from './constants';
 import { DragAndDropIssue, getFilesFromDataTransfer } from './services/dragAndDrop';
 
 const App: React.FC = () => {
   const [files, setFiles] = useState<AppFile[]>([]);
   const [mode, setMode] = useState<AppMode>(AppMode.IDLE);
+  const [toneAlgorithm, setToneAlgorithm] = useState<ToneAlgorithm>(DEFAULT_TONE_ALGORITHM);
   const [dropNotice, setDropNotice] = useState<{
     message: string;
     tone: 'info' | 'warning' | 'error';
@@ -228,6 +236,13 @@ const App: React.FC = () => {
                     1枚なら詳細編集、複数なら一括変換・ダウンロード。
                 </p>
             </div>
+
+            <AlgorithmSelect
+              value={toneAlgorithm}
+              options={TONE_ALGORITHM_OPTIONS}
+              onChange={setToneAlgorithm}
+              className="w-full max-w-md mb-6"
+            />
             
             <div className="w-full h-80">
               <Dropzone onFilesDropped={handleFilesDropped} onDropIssues={handleDropIssues} />
@@ -261,11 +276,20 @@ const App: React.FC = () => {
       )}
 
       {mode === AppMode.EDITOR && files.length > 0 && (
-        <Editor file={files[0]} onBack={handleReset} />
+        <Editor
+          file={files[0]}
+          onBack={handleReset}
+          toneAlgorithm={toneAlgorithm}
+          onAlgorithmChange={setToneAlgorithm}
+        />
       )}
 
       {mode === AppMode.BATCH_PROCESSING && files.length > 0 && (
-        <BatchProcessor files={files} onReset={handleReset} />
+        <BatchProcessor
+          files={files}
+          onReset={handleReset}
+          toneAlgorithm={toneAlgorithm}
+        />
       )}
     </div>
   );

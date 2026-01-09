@@ -1,17 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import JSZip from 'jszip';
 import saveAs from 'file-saver';
-import { DEFAULT_SETTINGS } from '../constants';
+import { DEFAULT_SETTINGS, TONE_ALGORITHM_OPTIONS } from '../constants';
 import { loadImage, processImage } from '../services/imageProcessor';
 import { Loader2, CheckCircle, Download, AlertCircle } from 'lucide-react';
-import { AppFile } from '../types';
+import { AppFile, ToneAlgorithm } from '../types';
 
 interface BatchProcessorProps {
   files: AppFile[];
   onReset: () => void;
+  toneAlgorithm: ToneAlgorithm;
 }
 
-const BatchProcessor: React.FC<BatchProcessorProps> = ({ files, onReset }) => {
+const BatchProcessor: React.FC<BatchProcessorProps> = ({ files, onReset, toneAlgorithm }) => {
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState<'processing' | 'zipping' | 'complete' | 'error'>('processing');
   const [zipBlob, setZipBlob] = useState<Blob | null>(null);
@@ -32,11 +33,12 @@ const BatchProcessor: React.FC<BatchProcessorProps> = ({ files, onReset }) => {
             // Sequential processing to prevent memory crash
             const img = await loadImage(file.file);
             // Apply default Shadows +70
-            const processedBlob = await processImage(
-              img,
-              DEFAULT_SETTINGS,
-              file.outputType
-            );
+          const processedBlob = await processImage(
+            img,
+            DEFAULT_SETTINGS,
+            file.outputType,
+            toneAlgorithm
+          );
             
             zip.file(`edited_${file.outputName}`, processedBlob);
             successCount++;
@@ -97,6 +99,11 @@ const BatchProcessor: React.FC<BatchProcessorProps> = ({ files, onReset }) => {
   return (
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-950 p-6">
       <div className="w-full max-w-md bg-gray-900 rounded-xl shadow-2xl p-8 border border-gray-800 text-center">
+        <p className="text-xs text-gray-500 mb-4">
+          アルゴリズム:{' '}
+          {TONE_ALGORITHM_OPTIONS.find((option) => option.id === toneAlgorithm)?.label ??
+            toneAlgorithm}
+        </p>
         
         {status === 'processing' && (
           <>

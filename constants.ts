@@ -1,4 +1,4 @@
-import { ImageSettings } from './types';
+import { ImageSettings, ToneAlgorithm } from './types';
 
 // Default settings: Shadows +70 as requested
 export const DEFAULT_SETTINGS: ImageSettings = {
@@ -18,6 +18,13 @@ export const RESET_SETTINGS: ImageSettings = {
   whites: 0,
   blacks: 0,
 };
+
+export const DEFAULT_TONE_ALGORITHM: ToneAlgorithm = 'classic';
+
+export const TONE_ALGORITHM_OPTIONS: { id: ToneAlgorithm; label: string }[] = [
+  { id: 'classic', label: '現行' },
+  { id: 'review', label: 'レビュー' },
+];
 
 // Limits
 export const LIMITS = {

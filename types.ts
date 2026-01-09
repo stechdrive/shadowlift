@@ -22,6 +22,8 @@ export interface AppFile {
   outputType: string;
 }
 
+export type ToneAlgorithm = 'classic' | 'review';
+
 export enum AppMode {
   IDLE = 'IDLE',
   EDITOR = 'EDITOR',

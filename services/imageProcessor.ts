@@ -1,4 +1,4 @@
-import { ImageSettings } from '../types';
+import { ImageSettings, ToneAlgorithm } from '../types';
 
 /**
  * Loads a File object into an HTMLImageElement
@@ -95,6 +95,191 @@ const smoothstep = (edge0: number, edge1: number, x: number): number => {
     return t * t * (3.0 - 2.0 * t);
 };
 
+type ToneParams = {
+    exposureMult: number;
+    S: number;
+    H: number;
+    W: number;
+    B: number;
+    C: number;
+    contrastFactor: number;
+    pivotLin: number;
+};
+
+type ReconstructionState = {
+    r: number;
+    g: number;
+    b: number;
+};
+
+type ToneAlgorithmImpl = {
+    toneMap: (y_base_lin: number, params: ToneParams) => number;
+    toeMask: (y_target_lin: number) => number;
+    postReconstruct?: (
+        state: ReconstructionState,
+        y_target_lin: number,
+        params: ToneParams,
+        toeMask: number
+    ) => void;
+};
+
+const applyShadowsClassic = (y_target_lin: number, S: number): number => {
+    // Power Curve: Slightly stronger lift (0.60 -> 0.65)
+    const shadowPower = 1.0 - (S * 0.65);
+
+    let y_lifted = Math.pow(y_target_lin, shadowPower);
+
+    // Toe Lift (Matte Black Effect): allow visible lifting of pure blacks.
+    if (S > 0) {
+        const toeLift = S * 0.05;
+        y_lifted += toeLift * Math.exp(-9.0 * y_target_lin);
+    }
+
+    // Blend Weight: apply mostly to darks.
+    const blend = Math.pow(1.0 - Math.min(1.0, y_target_lin), 3.0);
+
+    return y_target_lin * (1.0 - blend) + y_lifted * blend;
+};
+
+const applyShadowsReview = (y_target_lin: number, S: number): number => {
+    // Review-tuned: softer toe lift and display-domain blend for stability.
+    const shadowPower = 1.0 - (S * 0.65);
+    let y_lifted = Math.pow(y_target_lin, shadowPower);
+
+    if (S > 0) {
+        const toeLift = S * 0.006;
+        y_lifted += toeLift * Math.exp(-25.0 * y_target_lin);
+    }
+
+    const yDisp = linearToSrgb(clamp01(y_target_lin));
+    const blend = Math.pow(1.0 - yDisp, 2.6);
+
+    return y_target_lin * (1.0 - blend) + y_lifted * blend;
+};
+
+const applyHighlights = (y_target_lin: number, H: number): number => {
+    if (H === 0) return y_target_lin;
+    const highlightMask = Math.pow(Math.min(1, y_target_lin), 3.0);
+    return y_target_lin * (1.0 + H * 0.6 * highlightMask);
+};
+
+const applyWhites = (y_target_lin: number, W: number): number => {
+    if (W === 0) return y_target_lin;
+
+    const yClamped = clamp01(y_target_lin);
+    const highlightMask = smoothstep(0.35, 1.0, yClamped);
+    const posHighlightMask = smoothstep(0.25, 1.0, yClamped);
+    const wideMask = smoothstep(0.15, 0.9, yClamped);
+    const headroom = 1.0 - yClamped;
+
+    if (W > 0) {
+        const whiteStrength = W * 1.25;
+        const lift = whiteStrength * 0.28 * wideMask;
+        const base = yClamped + lift;
+        const rolloff = 1.0 - Math.pow(1.0 - clamp01(base), 1.0 + whiteStrength * 1.15);
+        // Push highlights above 1.0 to allow visible clipping ("blow-out").
+        const blow = whiteStrength * 0.7 * Math.pow(posHighlightMask, 1.4);
+        const mapped = rolloff + blow;
+        return base * (1.0 - posHighlightMask) + mapped * posHighlightMask;
+    }
+
+    const whiteStrength = Math.abs(W) * 1.6;
+    const whiteExponent = 1.0 / (1.0 + whiteStrength);
+    const mapped = 1.0 - Math.pow(headroom, whiteExponent);
+    return yClamped * (1.0 - highlightMask) + mapped * highlightMask;
+};
+
+const applyBlacks = (y_target_lin: number, B: number): number => {
+    if (B === 0) return y_target_lin;
+
+    const yClamped = clamp01(y_target_lin);
+    const shadowMask = 1.0 - smoothstep(0.0, 0.22, yClamped);
+
+    if (B > 0) {
+        // Subtle black point lift focused on the deepest shadows (not a midtone lift).
+        const blackStrength = B * 0.7;
+        const lift = blackStrength * 0.06 * Math.pow(shadowMask, 1.6) * (1.0 - yClamped);
+        const mapped = yClamped + lift;
+        return yClamped * (1.0 - shadowMask) + mapped * shadowMask;
+    }
+
+    const blackStrength = Math.abs(B) * 1.3;
+    const blackExponent = 1.0 + blackStrength;
+    const mapped = Math.pow(yClamped, blackExponent);
+    return yClamped * (1.0 - shadowMask) + mapped * shadowMask;
+};
+
+const applyContrast = (y_target_lin: number, params: ToneParams): number => {
+    if (params.C === 0) return y_target_lin;
+    if (y_target_lin <= 0) return y_target_lin;
+    return params.pivotLin * Math.pow(y_target_lin / params.pivotLin, params.contrastFactor);
+};
+
+const applyToneMap = (
+    y_base_lin: number,
+    params: ToneParams,
+    applyShadows: (y_target_lin: number, S: number) => number
+): number => {
+    let y_target_lin = y_base_lin;
+
+    // A. Exposure
+    if (params.exposureMult !== 1) {
+        y_target_lin *= params.exposureMult;
+    }
+
+    // B. Shadows
+    if (params.S !== 0) {
+        y_target_lin = applyShadows(y_target_lin, params.S);
+    }
+
+    // C. Highlights
+    y_target_lin = applyHighlights(y_target_lin, params.H);
+
+    // D. Whites / Blacks
+    y_target_lin = applyWhites(y_target_lin, params.W);
+    y_target_lin = applyBlacks(y_target_lin, params.B);
+
+    // E. Contrast (Pivot)
+    y_target_lin = applyContrast(y_target_lin, params);
+
+    return Math.max(0, y_target_lin);
+};
+
+const classicAlgorithm: ToneAlgorithmImpl = {
+    toneMap: (y_base_lin, params) => applyToneMap(y_base_lin, params, applyShadowsClassic),
+    toeMask: (y_target_lin) => 1.0 - smoothstep(0.0, 0.25, Math.min(1.0, y_target_lin)),
+};
+
+const reviewAlgorithm: ToneAlgorithmImpl = {
+    toneMap: (y_base_lin, params) => applyToneMap(y_base_lin, params, applyShadowsReview),
+    toeMask: (y_target_lin) =>
+        1.0 - smoothstep(0.0, 0.25, linearToSrgb(clamp01(y_target_lin))),
+    postReconstruct: (state, y_target_lin, params, toeMask) => {
+        const y_out_lin = 0.2126 * state.r + 0.7152 * state.g + 0.0722 * state.b;
+        const fillK = 0.8;
+        const fill = Math.max(0.0, y_target_lin - y_out_lin) * toeMask * fillK;
+        state.r += fill;
+        state.g += fill;
+        state.b += fill;
+
+        const satK = Math.max(0.0, params.S) * 0.15 * toeMask;
+        if (satK > 0) {
+            const yN = 0.2126 * state.r + 0.7152 * state.g + 0.0722 * state.b;
+            state.r = state.r * (1.0 - satK) + yN * satK;
+            state.g = state.g * (1.0 - satK) + yN * satK;
+            state.b = state.b * (1.0 - satK) + yN * satK;
+        }
+    },
+};
+
+const TONE_ALGORITHMS: Record<ToneAlgorithm, ToneAlgorithmImpl> = {
+    classic: classicAlgorithm,
+    review: reviewAlgorithm,
+};
+
+const getToneAlgorithm = (algorithm: ToneAlgorithm): ToneAlgorithmImpl =>
+    TONE_ALGORITHMS[algorithm] ?? classicAlgorithm;
+
 /**
  * Main processing function
  * Implements Base/Detail separation with improved Shadow Recovery logic
@@ -103,7 +288,8 @@ const smoothstep = (edge0: number, edge1: number, x: number): number => {
 export const processImage = async (
   img: HTMLImageElement,
   settings: ImageSettings,
-  outputType: string
+  outputType: string,
+  algorithm: ToneAlgorithm = 'classic'
 ): Promise<Blob> => {
   const width = img.naturalWidth;
   const height = img.naturalHeight;
@@ -149,6 +335,18 @@ export const processImage = async (
 
   const contrastFactor = C >= 0 ? 1 + C : 1 / (1 - C);
   const pivotLin = 0.18; // Linear Middle Gray
+  const toneParams: ToneParams = {
+    exposureMult,
+    S,
+    H,
+    W,
+    B,
+    C,
+    contrastFactor,
+    pivotLin,
+  };
+  const algorithmImpl = getToneAlgorithm(algorithm);
+  const postState = algorithmImpl.postReconstruct ? { r: 0, g: 0, b: 0 } : null;
 
   // Process Pixels
   const len = originalData.length;
@@ -178,101 +376,8 @@ export const processImage = async (
 
     // Add epsilon to prevent divide-by-zero later (also stabilizes deep-black math)
     y_base_lin = Math.max(0.0001, y_base_lin);
-// --- 3. Tone Map the Base Layer ---
-    let y_target_lin = y_base_lin;
-
-    // A. Exposure
-    if (exposureMult !== 1) {
-        y_target_lin *= exposureMult;
-    }
-
-    // B. Shadows (Improved: Stronger Lift & Toe Lift)
-    // Refined based on feedback: "Lift pure black more, allow it to look slightly washed/matte."
-    if (S !== 0) {
-        // Power Curve: Slightly stronger lift (0.60 -> 0.65)
-        const shadowPower = 1.0 - (S * 0.65); 
-        
-        let y_lifted = Math.pow(y_target_lin, shadowPower);
-
-        // Toe Lift (Matte Black Effect):
-        // Increased from 0.02 to 0.05 to allow visible lifting of pure blacks.
-        // This mimics the "Blacks" slider or strong Shadow recovery in LR.
-        if (S > 0) {
-            const toeLift = S * 0.05; 
-            // Decay function: Relaxed decay (-12.0 -> -9.0) to spread the lift effect wider (softer look)
-            y_lifted += toeLift * Math.exp(-9.0 * y_target_lin);
-        }
-        
-        // Blend Weight: Apply mostly to darks.
-        // Relaxed power (4.0 -> 3.0) to allow the shadow lift to blend smoother into midtones, reducing perceived contrast.
-        const blend = Math.pow(1.0 - Math.min(1.0, y_target_lin), 3.0);
-        
-        y_target_lin = y_target_lin * (1.0 - blend) + y_lifted * blend;
-    }
-
-    // C. Highlights (Compression)
-    if (H !== 0) {
-        // Focus on top end
-        const highlightMask = Math.pow(Math.min(1, y_target_lin), 3.0);
-        if (H < 0) {
-             y_target_lin = y_target_lin * (1.0 + H * 0.6 * highlightMask);
-        } else {
-             y_target_lin = y_target_lin * (1.0 + H * 0.6 * highlightMask);
-        }
-    }
-
-    // D. Whites / Blacks (Clipping with soft roll-off, PV2012-like)
-    // These primarily affect the endpoints with minimal midtone shift.
-    if (W !== 0) {
-        const yClamped = clamp01(y_target_lin);
-        const highlightMask = smoothstep(0.35, 1.0, yClamped);
-        const posHighlightMask = smoothstep(0.25, 1.0, yClamped);
-        const wideMask = smoothstep(0.15, 0.9, yClamped);
-        const headroom = 1.0 - yClamped;
-
-        if (W > 0) {
-            const whiteStrength = W * 1.25;
-            const lift = whiteStrength * 0.28 * wideMask;
-            const base = yClamped + lift;
-            const rolloff = 1.0 - Math.pow(1.0 - clamp01(base), 1.0 + whiteStrength * 1.15);
-            // Push highlights above 1.0 to allow visible clipping ("blow-out") like Lightroom.
-            const blow = whiteStrength * 0.7 * Math.pow(posHighlightMask, 1.4);
-            const mapped = rolloff + blow;
-            y_target_lin = base * (1.0 - posHighlightMask) + mapped * posHighlightMask;
-        } else {
-            const whiteStrength = Math.abs(W) * 1.6;
-            const whiteExponent = 1.0 / (1.0 + whiteStrength);
-            const mapped = 1.0 - Math.pow(headroom, whiteExponent);
-            y_target_lin = yClamped * (1.0 - highlightMask) + mapped * highlightMask;
-        }
-    }
-
-    if (B !== 0) {
-        const yClamped = clamp01(y_target_lin);
-        const shadowMask = 1.0 - smoothstep(0.0, 0.22, yClamped);
-
-        if (B > 0) {
-            // Subtle black point lift focused on the deepest shadows (not a midtone lift).
-            const blackStrength = B * 0.7;
-            const lift = blackStrength * 0.06 * Math.pow(shadowMask, 1.6) * (1.0 - yClamped);
-            const mapped = yClamped + lift;
-            y_target_lin = yClamped * (1.0 - shadowMask) + mapped * shadowMask;
-        } else {
-            const blackStrength = Math.abs(B) * 1.3;
-            const blackExponent = 1.0 + blackStrength;
-            const mapped = Math.pow(yClamped, blackExponent);
-            y_target_lin = yClamped * (1.0 - shadowMask) + mapped * shadowMask;
-        }
-    }
-
-    // E. Contrast (Pivot)
-    if (C !== 0) {
-        if (y_target_lin > 0) {
-             y_target_lin = pivotLin * Math.pow(y_target_lin / pivotLin, contrastFactor);
-        }
-    }
-    
-    y_target_lin = Math.max(0, y_target_lin);
+    // --- 3. Tone Map the Base Layer ---
+    const y_target_lin = algorithmImpl.toneMap(y_base_lin, toneParams);
 
     // --- 4. Reconstruct (shadow-friendly, less "crunchy") ---
     // Ratio = NewBase / OldBase (linear)
@@ -293,8 +398,7 @@ export const processImage = async (
     const b_scaled_base_lin = bb_lin * clampedRatio;
 
     // Toe / shadow mask: 1.0 in deep shadows, 0.0 by ~25% luminance.
-    const toeEnd = 0.25;
-    const toeMask = 1.0 - smoothstep(0.0, toeEnd, Math.min(1.0, y_target_lin));
+    const toeMask = algorithmImpl.toeMask(y_target_lin);
 
     // Detail damping (reduces perceived contrast/noise in lifted shadows)
     const detailDamp = Math.max(0.0, S) * 0.35; // up to 35% at Shadows +100
@@ -313,6 +417,16 @@ export const processImage = async (
     r_out_lin = Math.max(0.0, r_out_lin + toeLiftLin);
     g_out_lin = Math.max(0.0, g_out_lin + toeLiftLin);
     b_out_lin = Math.max(0.0, b_out_lin + toeLiftLin);
+
+    if (algorithmImpl.postReconstruct && postState) {
+        postState.r = r_out_lin;
+        postState.g = g_out_lin;
+        postState.b = b_out_lin;
+        algorithmImpl.postReconstruct(postState, y_target_lin, toneParams, toeMask);
+        r_out_lin = postState.r;
+        g_out_lin = postState.g;
+        b_out_lin = postState.b;
+    }
 
     // Convert back to sRGB for canvas output
     let r_out = linearToSrgb(r_out_lin);

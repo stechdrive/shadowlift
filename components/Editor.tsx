@@ -11,8 +11,9 @@ import {
   ChevronUp,
   SlidersHorizontal,
 } from 'lucide-react';
-import { AppFile, ImageSettings } from '../types';
-import { DEFAULT_SETTINGS, LIMITS, RESET_SETTINGS } from '../constants';
+import { AppFile, ImageSettings, ToneAlgorithm } from '../types';
+import { DEFAULT_SETTINGS, LIMITS, RESET_SETTINGS, TONE_ALGORITHM_OPTIONS } from '../constants';
+import AlgorithmSelect from './AlgorithmSelect';
 import Slider from './Slider';
 import { processImage, loadImage, createResizedImage } from '../services/imageProcessor';
 import saveAs from 'file-saver';
@@ -21,9 +22,11 @@ import { useHistoryState } from '../hooks/useHistoryState';
 interface EditorProps {
   file: AppFile;
   onBack: () => void;
+  toneAlgorithm: ToneAlgorithm;
+  onAlgorithmChange: (algorithm: ToneAlgorithm) => void;
 }
 
-const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
+const Editor: React.FC<EditorProps> = ({ file, onBack, toneAlgorithm, onAlgorithmChange }) => {
   const {
     state: settings,
     setState: setSettings,
@@ -139,7 +142,8 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file]);
 
-  const updatePreview = useCallback(async (currentSettings: ImageSettings) => {
+  const updatePreview = useCallback(
+    async (currentSettings: ImageSettings, algorithm: ToneAlgorithm = toneAlgorithm) => {
     if (!previewSourceImageRef.current || !isMountedRef.current) return;
     setIsProcessing(true);
 
@@ -157,7 +161,8 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
         const blob = await processImage(
           previewSourceImageRef.current,
           currentSettings,
-          file.outputType
+          file.outputType,
+          algorithm
         );
         const url = URL.createObjectURL(blob);
         if (!isMountedRef.current) {
@@ -181,7 +186,7 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
         }
       }
     }, 20); // 20ms debounce for smoother live preview
-  }, [file.outputType]);
+  }, [file.outputType, toneAlgorithm]);
 
   // Update live settings and preview without committing to history
   const handleSettingChange = (key: keyof ImageSettings, value: number) => {
@@ -217,7 +222,12 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
     setTimeout(async () => {
         try {
             // Process the FULL RESOLUTION image for download
-            const blob = await processImage(originalFullImageRef.current!, settings, file.outputType);
+            const blob = await processImage(
+              originalFullImageRef.current!,
+              settings,
+              file.outputType,
+              toneAlgorithm
+            );
             saveAs(blob, `edited_${file.outputName}`);
         } catch (e) {
             console.error(e);
@@ -235,6 +245,12 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
 
   // Compare button handler (Toggle)
   const toggleCompare = () => setIsCompareView(prev => !prev);
+
+  const handleAlgorithmSelection = (next: ToneAlgorithm) => {
+    if (next === toneAlgorithm) return;
+    onAlgorithmChange(next);
+    updatePreview(settings, next);
+  };
 
   type SliderKey = keyof ImageSettings;
 
@@ -292,6 +308,15 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
       );
     });
 
+  const renderAlgorithmSelect = (className?: string) => (
+    <AlgorithmSelect
+      value={toneAlgorithm}
+      options={TONE_ALGORITHM_OPTIONS}
+      onChange={handleAlgorithmSelection}
+      className={className}
+    />
+  );
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const isModifierPressed = event.ctrlKey || event.metaKey;
@@ -322,6 +347,12 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleRedo, handleUndo]);
+
+  useEffect(() => {
+    if (!previewSourceImageRef.current) return;
+    updatePreview(settings, toneAlgorithm);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toneAlgorithm]);
 
   return (
     <div className="flex flex-col md:flex-row h-screen bg-gray-950 text-gray-200">
@@ -438,6 +469,8 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
                     <RotateCcw size={12} /> リセット
                 </button>
             </div>
+
+            {renderAlgorithmSelect('mb-4')}
             
             <div className="flex justify-center gap-6 pb-1">
                 <button 
@@ -532,6 +565,10 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
                 </button>
               ))}
             </div>
+          </div>
+
+          <div className="px-4 pt-4">
+            {renderAlgorithmSelect()}
           </div>
 
           <div
