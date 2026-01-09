@@ -1,5 +1,16 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Download, ArrowLeft, RotateCcw, Undo2, Redo2, Eye, EyeOff } from 'lucide-react';
+import {
+  Download,
+  ArrowLeft,
+  RotateCcw,
+  Undo2,
+  Redo2,
+  Eye,
+  EyeOff,
+  ChevronDown,
+  ChevronUp,
+  SlidersHorizontal,
+} from 'lucide-react';
 import { AppFile, ImageSettings } from '../types';
 import { DEFAULT_SETTINGS, LIMITS, RESET_SETTINGS } from '../constants';
 import Slider from './Slider';
@@ -29,6 +40,8 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
   const [isCompareView, setIsCompareView] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [activeMobileTab, setActiveMobileTab] = useState<'basic' | 'tone' | 'levels'>('basic');
+  const [isMobileSheetExpanded, setIsMobileSheetExpanded] = useState(true);
   
   const [isProcessing, setIsProcessing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -223,6 +236,62 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
   // Compare button handler (Toggle)
   const toggleCompare = () => setIsCompareView(prev => !prev);
 
+  type SliderKey = keyof ImageSettings;
+
+  const sliderConfig: Record<
+    SliderKey,
+    { label: string; min: number; max: number; step?: number }
+  > = {
+    exposure: {
+      label: '露光量',
+      min: LIMITS.exposure.min,
+      max: LIMITS.exposure.max,
+      step: LIMITS.exposure.step,
+    },
+    contrast: {
+      label: 'コントラスト',
+      min: LIMITS.others.min,
+      max: LIMITS.others.max,
+    },
+    highlights: {
+      label: 'ハイライト',
+      min: LIMITS.others.min,
+      max: LIMITS.others.max,
+    },
+    shadows: {
+      label: 'シャドウ',
+      min: LIMITS.others.min,
+      max: LIMITS.others.max,
+    },
+    whites: {
+      label: '白レベル',
+      min: LIMITS.others.min,
+      max: LIMITS.others.max,
+    },
+    blacks: {
+      label: '黒レベル',
+      min: LIMITS.others.min,
+      max: LIMITS.others.max,
+    },
+  };
+
+  const renderSliders = (keys: SliderKey[]) =>
+    keys.map((key) => {
+      const config = sliderConfig[key];
+      return (
+        <Slider
+          key={key}
+          label={config.label}
+          value={settings[key]}
+          min={config.min}
+          max={config.max}
+          step={config.step}
+          onChange={(v) => handleSettingChange(key, v)}
+          onCommit={handleSettingCommit}
+        />
+      );
+    });
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const isModifierPressed = event.ctrlKey || event.metaKey;
@@ -357,8 +426,8 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
         </button>
       </div>
 
-      {/* Sidebar Controls */}
-      <div className="w-full md:w-80 bg-gray-850 border-l border-gray-800 flex flex-col z-10">
+      {/* Sidebar Controls (Desktop) */}
+      <div className="hidden md:flex md:w-80 bg-gray-850 border-l border-gray-800 flex-col z-10">
         <div className="p-4 border-b border-gray-800">
             <div className="flex justify-end items-center mb-4">
                 <button 
@@ -393,58 +462,11 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 scrollbar-thin">
-          <Slider
-            label="露光量"
-            value={settings.exposure}
-            min={LIMITS.exposure.min}
-            max={LIMITS.exposure.max}
-            step={LIMITS.exposure.step}
-            onChange={(v) => handleSettingChange('exposure', v)}
-            onCommit={handleSettingCommit}
-          />
-          <Slider
-            label="コントラスト"
-            value={settings.contrast}
-            min={LIMITS.others.min}
-            max={LIMITS.others.max}
-            onChange={(v) => handleSettingChange('contrast', v)}
-            onCommit={handleSettingCommit}
-          />
+          {renderSliders(['exposure', 'contrast'])}
           
           <div className="my-6 border-t border-gray-800"></div>
 
-          <Slider
-            label="ハイライト"
-            value={settings.highlights}
-            min={LIMITS.others.min}
-            max={LIMITS.others.max}
-            onChange={(v) => handleSettingChange('highlights', v)}
-            onCommit={handleSettingCommit}
-          />
-          <Slider
-            label="シャドウ"
-            value={settings.shadows}
-            min={LIMITS.others.min}
-            max={LIMITS.others.max}
-            onChange={(v) => handleSettingChange('shadows', v)}
-            onCommit={handleSettingCommit}
-          />
-          <Slider
-            label="白レベル"
-            value={settings.whites}
-            min={LIMITS.others.min}
-            max={LIMITS.others.max}
-            onChange={(v) => handleSettingChange('whites', v)}
-            onCommit={handleSettingCommit}
-          />
-          <Slider
-            label="黒レベル"
-            value={settings.blacks}
-            min={LIMITS.others.min}
-            max={LIMITS.others.max}
-            onChange={(v) => handleSettingChange('blacks', v)}
-            onCommit={handleSettingCommit}
-          />
+          {renderSliders(['highlights', 'shadows', 'whites', 'blacks'])}
         </div>
 
         <div className="p-5 border-t border-gray-800 bg-gray-850">
@@ -462,6 +484,69 @@ const Editor: React.FC<EditorProps> = ({ file, onBack }) => {
                  </>
              )}
            </button>
+        </div>
+      </div>
+
+      {/* Mobile Bottom Sheet Controls */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 z-30">
+        <div className="w-full bg-gray-900/95 border-t border-gray-800 backdrop-blur-xl shadow-2xl">
+          <div className="flex items-center justify-between px-4 pt-3">
+            <div className="flex items-center gap-2 text-sm font-semibold text-gray-200">
+              <SlidersHorizontal size={16} />
+              調整
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleReset}
+                className="text-xs text-gray-400 hover:text-white transition"
+              >
+                リセット
+              </button>
+              <button
+                onClick={() => setIsMobileSheetExpanded((prev) => !prev)}
+                className="p-1 text-gray-300 hover:text-white transition"
+                aria-label={isMobileSheetExpanded ? 'パネルを閉じる' : 'パネルを開く'}
+              >
+                {isMobileSheetExpanded ? <ChevronDown size={18} /> : <ChevronUp size={18} />}
+              </button>
+            </div>
+          </div>
+
+          <div className="px-4 pt-3">
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                { id: 'basic', label: '基本' },
+                { id: 'tone', label: '陰影' },
+                { id: 'levels', label: '白黒' },
+              ].map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => setActiveMobileTab(tab.id as typeof activeMobileTab)}
+                  className={`py-2 rounded-full text-xs font-semibold transition ${
+                    activeMobileTab === tab.id
+                      ? 'bg-blue-600 text-white shadow-md shadow-blue-900/30'
+                      : 'bg-gray-800 text-gray-300 hover:text-white'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div
+            className={`px-4 transition-[max-height,opacity] duration-300 ease-out ${
+              isMobileSheetExpanded
+                ? 'max-h-[45vh] opacity-100'
+                : 'max-h-0 opacity-0 pointer-events-none'
+            } overflow-y-auto pb-[env(safe-area-inset-bottom)]`}
+          >
+            <div className="pt-4">
+              {activeMobileTab === 'basic' && renderSliders(['exposure', 'contrast'])}
+              {activeMobileTab === 'tone' && renderSliders(['highlights', 'shadows'])}
+              {activeMobileTab === 'levels' && renderSliders(['whites', 'blacks'])}
+            </div>
+          </div>
         </div>
       </div>
     </div>

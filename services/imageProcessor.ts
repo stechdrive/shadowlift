@@ -221,10 +221,42 @@ export const processImage = async (
         }
     }
 
-    // D. Whites / Blacks (Additive/Offset)
-    // These shift the floor/ceiling.
-    if (W !== 0) y_target_lin += W * 0.15 * Math.pow(y_target_lin, 2.0);
-    if (B !== 0) y_target_lin += B * 0.15 * Math.pow(1.0 - y_target_lin, 3.0);
+    // D. Whites / Blacks (Clipping with soft roll-off, PV2012-like)
+    // These primarily affect the endpoints with minimal midtone shift.
+    if (W !== 0) {
+        const yClamped = clamp01(y_target_lin);
+        const highlightMask = smoothstep(0.35, 1.0, yClamped);
+        const posHighlightMask = smoothstep(0.25, 1.0, yClamped);
+        const wideMask = smoothstep(0.15, 0.9, yClamped);
+        const headroom = 1.0 - yClamped;
+
+        if (W > 0) {
+            const whiteStrength = W * 1.25;
+            const lift = whiteStrength * 0.28 * wideMask;
+            const base = yClamped + lift;
+            const rolloff = 1.0 - Math.pow(1.0 - clamp01(base), 1.0 + whiteStrength * 1.15);
+            // Push highlights above 1.0 to allow visible clipping ("blow-out") like Lightroom.
+            const blow = whiteStrength * 0.7 * Math.pow(posHighlightMask, 1.4);
+            const mapped = rolloff + blow;
+            y_target_lin = base * (1.0 - posHighlightMask) + mapped * posHighlightMask;
+        } else {
+            const whiteStrength = Math.abs(W) * 1.6;
+            const whiteExponent = 1.0 / (1.0 + whiteStrength);
+            const mapped = 1.0 - Math.pow(headroom, whiteExponent);
+            y_target_lin = yClamped * (1.0 - highlightMask) + mapped * highlightMask;
+        }
+    }
+
+    if (B !== 0) {
+        const blackStrength = Math.abs(B) * 1.3;
+        const blackExponent = B > 0
+            ? 1.0 / (1.0 + blackStrength)
+            : 1.0 + blackStrength;
+        const yClamped = clamp01(y_target_lin);
+        const shadowMask = 1.0 - smoothstep(0.0, 0.35, yClamped);
+        const mapped = Math.pow(yClamped, blackExponent);
+        y_target_lin = yClamped * (1.0 - shadowMask) + mapped * shadowMask;
+    }
 
     // E. Contrast (Pivot)
     if (C !== 0) {
